@@ -148,44 +148,130 @@ def dbview():
         </body></html>
         """, 401
 
+    # --- Read filter parameters from URL ---
+    search_text = request.args.get("search", "").strip()
+    date_from = request.args.get("date_from", "").strip()
+    date_to = request.args.get("date_to", "").strip()
+    table_filter = request.args.get("table", "all")
+    row_limit_raw = request.args.get("limit", "200").strip()
+
+    # Validate row limit
+    if row_limit_raw == "all":
+        row_limit = None
+    else:
+        try:
+            row_limit = int(row_limit_raw)
+            if row_limit <= 0:
+                row_limit = 200
+        except ValueError:
+            row_limit = 200
+
     conn = get_db()
     cur = conn.cursor()
     sections = []
 
-    cur.execute("SELECT * FROM population_state ORDER BY state_name")
-    cols = [desc[0] for desc in cur.description]
-    rows = cur.fetchall()
-    sections.append(("population_state", cols, rows))
+    table_list = ["counter_state", "counter_logs", "population_state",
+                  "population_history", "cpaas_totals", "cpaas_minute_stats",
+                  "stock_state", "stock_history"]
 
-    cur.execute("SELECT * FROM population_history ORDER BY id DESC LIMIT 15")
-    cols = [desc[0] for desc in cur.description]
-    rows = cur.fetchall()
-    sections.append(("population_history", cols, rows))
+    for table_name in table_list:
+        if table_filter != "all" and table_filter != table_name:
+            continue
+
+        has_log_time = table_name in ("counter_logs", "population_history",
+                                       "cpaas_minute_stats", "stock_history")
+
+        if has_log_time:
+            query = f"SELECT * FROM {table_name} WHERE 1=1"
+            params = []
+            if date_from:
+                query += " AND log_time >= %s"
+                params.append(date_from)
+            if date_to:
+                query += " AND log_time <= %s"
+                params.append(date_to + " 23:59:59")
+            if search_text:
+                query += " AND log_time::text ILIKE %s"
+                params.append(f"%{search_text}%")
+            query += " ORDER BY id DESC"
+            if row_limit is not None:
+                query += " LIMIT %s"
+                params.append(row_limit)
+            cur.execute(query, params)
+        else:
+            cur.execute(f"SELECT * FROM {table_name} ORDER BY 1")
+
+        cols = [desc[0] for desc in cur.description]
+        rows = cur.fetchall()
+        sections.append((table_name, cols, rows))
 
     cur.close()
     conn.close()
 
-    html = """
+    # --- Build filter form ---
+    table_options = "".join(
+        f'<option value="{t}" {"selected" if table_filter==t else ""}>{t}</option>'
+        for t in table_list
+    )
+
+    limit_options_list = ["20", "50", "200", "500", "1000", "all"]
+    limit_options = "".join(
+        f'<option value="{l}" {"selected" if row_limit_raw==l else ""}>{"All" if l=="all" else l}</option>'
+        for l in limit_options_list
+    )
+
+    filter_html = f"""
+    <form method="GET" style="margin-bottom:25px; background:#1a1a1a; padding:15px; border-radius:6px;">
+        <input type="hidden" name="password" value="{provided_password}">
+        <label>Table:
+            <select name="table">
+                <option value="all" {"selected" if table_filter=="all" else ""}>All Tables</option>
+                {table_options}
+            </select>
+        </label>
+        &nbsp;&nbsp;
+        <label>Show:
+            <select name="limit">{limit_options}</select> rows
+        </label>
+        &nbsp;&nbsp;
+        <label>Search (timestamp text): <input type="text" name="search" value="{search_text}" placeholder="e.g. 2026-06-17"></label>
+        &nbsp;&nbsp;
+        <label>From: <input type="date" name="date_from" value="{date_from}"></label>
+        &nbsp;&nbsp;
+        <label>To: <input type="date" name="date_to" value="{date_to}"></label>
+        &nbsp;&nbsp;
+        <button type="submit" style="background:#0a5;color:white;border:none;padding:6px 14px;cursor:pointer;border-radius:4px;">Apply Filters</button>
+        <a href="/dbview?password={provided_password}" style="color:cyan; margin-left:10px;">Clear Filters</a>
+    </form>
+    """
+
+    html = f"""
     <html>
     <head>
         <title>Database Viewer</title>
         <style>
-            body { font-family:monospace; background:#111; color:#0f0; padding:30px; }
-            h3 { color:cyan; margin-top:30px; }
-            table { border-collapse:collapse; width:100%; margin-bottom:10px; }
-            td, th { padding:6px 10px; text-align:left; border-bottom:1px solid #333; font-size:13px; }
-            th { color:yellow; }
+            body {{ font-family:monospace; background:#111; color:#0f0; padding:30px; }}
+            h3 {{ color:cyan; margin-top:30px; }}
+            table {{ border-collapse:collapse; width:100%; margin-bottom:10px; }}
+            td, th {{ padding:6px 10px; text-align:left; border-bottom:1px solid #333; font-size:13px; }}
+            th {{ color:yellow; }}
+            input, select {{ background:#222; color:#0f0; border:1px solid #444; padding:4px; }}
+            label {{ color:#aaa; }}
         </style>
     </head>
     <body>
-        <h2>🗄️ Population Database Viewer</h2>
+        <h2>🗄️ Database Viewer (Read-Only)</h2>
+        <p style="color:#aaa">Showing tables from shared-logs-db</p>
+        {filter_html}
     """
+
     for table_name, cols, rows in sections:
         html += f"<h3>📋 {table_name} ({len(rows)} rows shown)</h3>"
         html += "<table><tr>" + "".join(f"<th>{c}</th>" for c in cols) + "</tr>"
         for row in rows:
             html += "<tr>" + "".join(f"<td>{val}</td>" for val in row) + "</tr>"
         html += "</table>"
+
     html += "</body></html>"
     return html
 
