@@ -1,9 +1,11 @@
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 import threading, time, random, datetime, os
 from datetime import timezone, timedelta
 import psycopg2
 
 app = Flask(__name__)
+CORS(app)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 def now_ist():
