@@ -137,6 +137,29 @@ def api():
     states, last_updated = get_state()
     return jsonify({"last_updated_ist": last_updated, "states": states})
 
+@app.route("/api/history")
+def api_history():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT state_name, log_time, population, change
+        FROM population_history
+        ORDER BY id DESC LIMIT 200
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    history = {}
+    for state_name, log_time, population, change in rows:
+        if state_name not in history:
+            history[state_name] = []
+        history[state_name].append({
+            "time": log_time,
+            "population": population,
+            "change": change
+        })
+    return jsonify({"history": history})
+
 @app.route("/dbview")
 def dbview():
     provided_password = request.args.get("password", "")
